@@ -54,6 +54,16 @@ fn classify(stderr: &str, stdout: &str) -> GitError {
             "Ce dossier n'est pas un dépôt Git.",
             details,
         )
+    } else if haystack.contains("conflict")
+        || haystack.contains("automatic merge failed")
+        || haystack.contains("could not apply")
+        || haystack.contains("needs merge")
+    {
+        GitError::new(
+            "merge_conflict",
+            "Conflit lors de la fusion. Résolvez les fichiers en conflit, puis committez.",
+            details,
+        )
     } else if haystack.contains("could not resolve host")
         || haystack.contains("unable to access")
         || haystack.contains("operation timed out")
@@ -524,6 +534,82 @@ pub fn git_push(path: String) -> GitResult<Vec<String>> {
         if !line.is_empty() {
             steps.push(line.to_string());
         }
+    }
+
+    Ok(steps)
+}
+
+/* ------------------------------------------------------------------ */
+/* Synchronisation : git pull                                          */
+/* ------------------------------------------------------------------ */
+
+/// Récupère et intègre les commits distants (`git pull`).
+///
+/// `rebase = true` rejoue les commits locaux au lieu de créer un commit de
+/// fusion ; la fusion est utilisée par défaut car elle est plus prévisible.
+#[tauri::command]
+pub fn git_pull(path: String, rebase: Option<bool>) -> GitResult<Vec<String>> {
+    let dir = Path::new(&path);
+    ensure_dir(dir)?;
+
+    let before = read_status(dir)?;
+
+    if before.remote.is_none() {
+        return Err(GitError::new(
+            "remote_missing",
+            "Aucun dépôt distant n'est configuré : rien à récupérer.",
+            before.remote_error,
+        ));
+    }
+
+    if before.branch.is_none() {
+        return Err(GitError::plain(
+            "detached_head",
+            "Vous êtes en HEAD détachée : le pull est impossible.",
+        ));
+    }
+
+    // Un pull sur un répertoire sale peut produire des conflits difficiles à
+    // démêler : on préfère demander à l'utilisateur de committer d'abord.
+    if !before.staged.is_empty() || !before.unstaged.is_empty() {
+        return Err(GitError::new(
+            "dirty_worktree",
+            "Des modifications locales ne sont pas committées. Committez-les avant de synchroniser.",
+            None,
+        ));
+    }
+
+    let use_rebase = rebase.unwrap_or(false);
+    let args: Vec<&str> = if use_rebase {
+        vec!["pull", "--rebase", "--no-edit"]
+    } else {
+        vec!["pull", "--no-edit"]
+    };
+
+    let output = run_git_checked(dir, &args, dir)?;
+
+    let mut steps = vec![if use_rebase {
+        "git pull --rebase".to_string()
+    } else {
+        "git pull".to_string()
+    }];
+
+    for line in format!("{}\n{}", output.stdout, output.stderr).lines() {
+        let line = line.trim();
+        if !line.is_empty() {
+            steps.push(line.to_string());
+        }
+    }
+
+    // Certains conflits ne produisent pas d'échec explicite : on relit l'état
+    // réel du dépôt pour ne pas annoncer un succès trompeur.
+    let after = read_status(dir)?;
+    if after.unstaged.iter().any(|change| change.status == "UU") {
+        return Err(GitError::new(
+            "merge_conflict",
+            "Conflit de fusion détecté. Résolvez les fichiers en conflit, indexez-les puis committez.",
+            Some(steps.join("\n")),
+        ));
     }
 
     Ok(steps)

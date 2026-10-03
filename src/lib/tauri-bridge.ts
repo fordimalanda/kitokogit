@@ -8,6 +8,7 @@ import type {
   GeneratedCommit,
   GitOperationResult,
   GitStatus,
+  HistoryEntry,
   ProjectInfo,
   ProviderKeyStatus,
 } from "@/types";
@@ -72,8 +73,15 @@ export const tauri = {
   gitCommit: (path: string, message: string) =>
     invoke<string[]>("git_commit", { path, message }),
   gitPush: (path: string) => invoke<string[]>("git_push", { path }),
+  gitPull: (path: string, rebase: boolean | null = null) =>
+    invoke<string[]>("git_pull", { path, rebase }),
   runGitWorkflow: (path: string, doAdd: boolean, message: string | null, doPush: boolean) =>
     invoke<GitOperationResult>("run_git_workflow", { path, doAdd, message, doPush }),
+
+  /* ---- Journal des commits ---- */
+  historyList: () => invoke<HistoryEntry[]>("history_list"),
+  historyAdd: (entry: HistoryEntry) => invoke<HistoryEntry[]>("history_add", { entry }),
+  historyClear: () => invoke<void>("history_clear"),
 
   /* ---- Clés API (stockées côté OS, jamais renvoyées au webview) ---- */
   listApiKeyStatus: () => invoke<ProviderKeyStatus[]>("list_api_key_status"),

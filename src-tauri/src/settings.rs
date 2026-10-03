@@ -40,7 +40,9 @@ impl Default for AppSettings {
     }
 }
 
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+/// Dossier de configuration de l'application, créé si nécessaire.
+/// Partagé avec le module [`crate::history`].
+pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app
         .path()
         .app_config_dir()
@@ -49,7 +51,11 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("Création du dossier de configuration impossible : {error}"))?;
 
-    Ok(directory.join(FILE_NAME))
+    Ok(directory)
+}
+
+fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join(FILE_NAME))
 }
 
 /// Lit les réglages. Un fichier absent ou illisible renvoie les valeurs par

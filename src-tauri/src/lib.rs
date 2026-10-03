@@ -6,12 +6,14 @@
 //! Modules :
 //! - [`ai`] : connecteurs HTTP vers les providers IA (clés jamais exposées) ;
 //! - [`git_manager`] : exécution des commandes Git natives et gestion d'erreurs ;
+//! - [`history`] : journal local des commits générés ;
 //! - [`scanner`] : détection des dépôts, monorepos et sous-projets ;
 //! - [`secrets`] : clés API des providers, stockées par l'OS ;
 //! - [`settings`] : réglages non secrets (provider et modèle par défaut).
 
 mod ai;
 mod git_manager;
+mod history;
 mod scanner;
 mod secrets;
 mod settings;
@@ -33,6 +35,7 @@ pub fn run() {
             git_manager::git_add_all,
             git_manager::git_commit,
             git_manager::git_push,
+            git_manager::git_pull,
             git_manager::run_git_workflow,
             // Scan de projets
             scanner::scan_project,
@@ -49,6 +52,10 @@ pub fn run() {
             ai::generate_commit_message,
             ai::test_provider_connection,
             ai::list_ollama_models,
+            // Journal des commits
+            history::history_list,
+            history::history_add,
+            history::history_clear,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de KitokoGit");

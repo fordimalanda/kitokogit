@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowDownToLine,
   CircleCheck,
   CloudOff,
   Eye,
@@ -33,7 +34,9 @@ interface SubProjectCardProps {
   onOpenDiff: () => void;
   onOpenCommit: () => void;
   onRunWorkflow: () => void;
+  onPull: () => void;
   running: boolean;
+  pulling: boolean;
   result: GitOperationResult | null;
 }
 
@@ -100,11 +103,20 @@ export function SubProjectCard({
   onOpenDiff,
   onOpenCommit,
   onRunWorkflow,
+  onPull,
   running,
+  pulling,
   result,
 }: SubProjectCardProps) {
   const status = statusOf(sub);
   const changed = sub.stagedFiles + sub.modifiedFiles + sub.untrackedFiles;
+
+  // Un push refusé ou des commits distants en avance ⇒ la synchronisation est
+  // l'action la plus utile : on met le bouton en avant.
+  const syncSuggested =
+    sub.behind > 0 ||
+    result?.error?.kind === "push_rejected" ||
+    result?.error?.kind === "merge_conflict";
 
   return (
     <Card className="gap-4">
@@ -170,6 +182,24 @@ export function SubProjectCard({
 
         {/* Actions */}
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant={syncSuggested ? "default" : "outline"}
+            size="sm"
+            onClick={onPull}
+            disabled={running || pulling || !sub.hasRemote}
+            title={
+              sub.hasRemote
+                ? "Récupérer et intégrer les commits distants (git pull)"
+                : "Aucun dépôt distant configuré"
+            }
+          >
+            {pulling ? (
+              <LoaderCircle data-icon="inline-start" className="animate-spin" />
+            ) : (
+              <ArrowDownToLine data-icon="inline-start" />
+            )}
+            Pull &amp; Sync
+          </Button>
           <Button variant="outline" size="sm" onClick={onOpenDiff} disabled={running}>
             <FileDiff data-icon="inline-start" />
             Voir le diff

@@ -4,17 +4,18 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Bell,
   Boxes,
   FolderKanban,
   LayoutDashboard,
   Moon,
   Plus,
+  ScrollText,
   Search,
   Settings as SettingsIcon,
   Sun,
 } from "lucide-react";
 
+import { HistoryModal } from "@/components/history-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ const PAGE_META: Record<string, { title: string; subtitle: string }> = {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Le thème réel est appliqué par le script inline de `layout.tsx` : on ne fait
   // que synchroniser l'état React après le montage pour éviter tout mismatch SSR.
@@ -120,9 +122,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Input placeholder="Rechercher…" className="w-56 pl-8" aria-label="Rechercher" />
           </div>
 
-          <Button variant="ghost" size="icon" aria-label="Notifications" className="relative">
-            <Bell />
-            <span className="bg-destructive absolute top-1.5 right-1.5 size-1.5 rounded-full" />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Journal des commits"
+            title="Journal des commits"
+            onClick={() => setHistoryOpen(true)}
+          >
+            <ScrollText />
           </Button>
 
           <Button
@@ -144,6 +151,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="mx-auto w-full max-w-6xl space-y-6 p-6">{children}</div>
         </main>
       </div>
+
+      <HistoryModal open={historyOpen} onOpenChange={setHistoryOpen} />
     </div>
   );
 }

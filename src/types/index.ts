@@ -161,3 +161,24 @@ export interface AppSettings {
   ollamaBaseUrl: string;
   fallbackToLocal: boolean;
 }
+
+/* ------------------------------------------------------------------ */
+/* Historique des commits                                              */
+/* ------------------------------------------------------------------ */
+
+/** Une entrée du journal local (20 dernières, `history.json`). */
+export interface HistoryEntry {
+  id: string;
+  /** Horodatage Unix en millisecondes. */
+  timestamp: number;
+  projectPath: string;
+  projectName: string;
+  branch: string | null;
+  /** `null` si le message vient de l'heuristique locale. */
+  provider: string | null;
+  model: string | null;
+  message: string;
+  commitHash: string | null;
+  origin: "ai" | "local";
+  success: boolean;
+}

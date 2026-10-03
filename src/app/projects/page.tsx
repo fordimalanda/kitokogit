@@ -2,16 +2,22 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderSearch, LoaderCircle, TriangleAlert } from "lucide-react";
+import { FolderSearch, ListChecks, LoaderCircle, TriangleAlert } from "lucide-react";
 
 import { CommitAiModal } from "@/components/commit-ai-modal";
 import { DiffViewer } from "@/components/diff-viewer";
 import { GLOBAL_VIEW, ProjectHeader, type ProjectTab } from "@/components/project-header";
 import { SubProjectCard } from "@/components/sub-project-card";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { isEmptyDiff } from "@/lib/commit-message";
-import { DEFAULT_SETTINGS, generateCommitMessage, loadSettings } from "@/lib/generate-commit";
-import { describeError, isTauri, tauri } from "@/lib/tauri-bridge";
+import {
+  DEFAULT_SETTINGS,
+  generateCommitMessage,
+  loadSettings,
+  type CommitGeneration,
+} from "@/lib/generate-commit";
+import { asStructuredError, describeError, isTauri, tauri } from "@/lib/tauri-bridge";
 import {
   loadWorkflowPrefs,
   resolveOptions,
@@ -21,7 +27,9 @@ import {
 import { cn } from "@/lib/utils";
 import type {
   AppSettings,
+  GitError,
   GitOperationResult,
+  HistoryEntry,
   ProjectInfo,
   SubProject,
   WorkflowOptions,
@@ -33,6 +41,14 @@ type ScanResult = { ok: true; project: ProjectInfo } | { ok: false; error: strin
 type Logs = Record<string, GitOperationResult | null>;
 type Busy = Record<string, boolean>;
 
+/** Progression de l'orchestration « Run All » d'un dossier racine. */
+interface RunAllState {
+  rootPath: string;
+  done: number;
+  total: number;
+  current: string;
+}
+
 export default function ProjectsPage() {
   const [roots, setRoots] = useState<string[]>([]);
   const [results, setResults] = useState<Record<string, ScanResult>>({});
@@ -42,6 +58,8 @@ export default function ProjectsPage() {
   const [commitTarget, setCommitTarget] = useState<SubProject | null>(null);
   const [logs, setLogs] = useState<Logs>({});
   const [busy, setBusy] = useState<Busy>({});
+  const [pulling, setPulling] = useState<Busy>({});
+  const [runAll, setRunAll] = useState<RunAllState | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
   /* ---------------- Scan ---------------- */
@@ -102,6 +120,20 @@ export default function ProjectsPage() {
     if (active === path) setActive(GLOBAL_VIEW);
   }
 
+  /**
+   * Association « dossier racine → sous-projet ».
+   * Déclarée avant les callbacks de workflow, qui s'appuient dessus.
+   */
+  const pairs = useMemo(() => {
+    const list: { rootPath: string; sub: SubProject }[] = [];
+    for (const [rootPath, result] of Object.entries(results)) {
+      if (result.ok) {
+        for (const sub of result.project.subProjects) list.push({ rootPath, sub });
+      }
+    }
+    return list;
+  }, [results]);
+
   /* ---------------- Préférences ---------------- */
 
   function updateOptions(path: string, options: WorkflowOptions) {
@@ -112,45 +144,87 @@ export default function ProjectsPage() {
 
   /* ---------------- Workflow ---------------- */
 
-  const runWorkflow = useCallback(
+  /** Ajoute une entrée au journal local (best-effort : jamais bloquant). */
+  const recordHistory = useCallback(
+    async (sub: SubProject, generation: CommitGeneration, result: GitOperationResult) => {
+      const entry: HistoryEntry = {
+        id: `${Date.now()}-${sub.name}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: Date.now(),
+        projectPath: sub.path,
+        projectName: sub.name,
+        branch: sub.branch,
+        provider: generation.provider,
+        model: generation.model,
+        message: generation.message,
+        commitHash: result.commitHash,
+        origin: generation.origin,
+        success: result.success,
+      };
+
+      try {
+        await tauri.historyAdd(entry);
+      } catch {
+        // Le journal est accessoire : une erreur d'écriture ne doit pas
+        // invalider un commit réussi.
+      }
+    },
+    []
+  );
+
+  /**
+   * Exécute la chaîne complète sur un sous-projet.
+   *
+   * Le traitement est séquentiel, y compris pour « Run All » : le journal reste
+   * lisible, le provider IA n'est pas saturé de requêtes simultanées et deux
+   * commits ne peuvent pas partir en parallèle sur le même dépôt.
+   */
+  const executeWorkflow = useCallback(
     async (rootPath: string, sub: SubProject) => {
       const options = resolveOptions(prefs, sub.path);
       setBusy((current) => ({ ...current, [sub.path]: true }));
 
       try {
-        let message: string | null = null;
-
-        if (options.autoCommit) {
-          const bundle = await tauri.getDiffBundle(sub.path);
-          if (isEmptyDiff(bundle)) {
-            setLogs((current) => ({
-              ...current,
-              [sub.path]: {
-                success: false,
-                steps: [],
-                commitHash: null,
-                error: {
-                  kind: "nothing_to_commit",
-                  message: "Aucune modification détectée dans ce dépôt.",
-                  details: null,
-                },
-              },
-            }));
-            return;
-          }
-          // Génération IA côté Rust ; repli automatique sur l'heuristique locale
-          // si le provider est injoignable ou non configuré.
-          const generation = await generateCommitMessage(sub.path, bundle, settings);
-          message = generation.message;
+        if (!options.autoCommit) {
+          const result = await tauri.runGitWorkflow(
+            sub.path,
+            options.autoAdd,
+            null,
+            options.autoPush
+          );
+          setLogs((current) => ({ ...current, [sub.path]: result }));
+          return;
         }
+
+        const bundle = await tauri.getDiffBundle(sub.path);
+        if (isEmptyDiff(bundle)) {
+          setLogs((current) => ({
+            ...current,
+            [sub.path]: {
+              success: false,
+              steps: [],
+              commitHash: null,
+              error: {
+                kind: "nothing_to_commit",
+                message: "Aucune modification détectée dans ce dépôt.",
+                details: null,
+              },
+            },
+          }));
+          return;
+        }
+
+        // Génération IA côté Rust ; repli automatique sur l'heuristique locale
+        // si le provider est injoignable ou non configuré.
+        const generation = await generateCommitMessage(sub.path, bundle, settings);
 
         const result = await tauri.runGitWorkflow(
           sub.path,
           options.autoAdd,
-          message,
+          generation.message,
           options.autoPush
         );
         setLogs((current) => ({ ...current, [sub.path]: result }));
+        await recordHistory(sub, generation, result);
       } catch (error) {
         setLogs((current) => ({
           ...current,
@@ -167,20 +241,65 @@ export default function ProjectsPage() {
         void scan(rootPath);
       }
     },
-    [prefs, settings, scan]
+    [prefs, settings, scan, recordHistory]
+  );
+
+  /** Synchronise un dépôt avec son remote (`git pull`). */
+  const pull = useCallback(
+    async (rootPath: string, sub: SubProject) => {
+      setPulling((current) => ({ ...current, [sub.path]: true }));
+      try {
+        const steps = await tauri.gitPull(sub.path, null);
+        setLogs((current) => ({
+          ...current,
+          [sub.path]: { success: true, steps, commitHash: null, error: null },
+        }));
+      } catch (error) {
+        const structured = asStructuredError(error);
+        setLogs((current) => ({
+          ...current,
+          [sub.path]: {
+            success: false,
+            steps: [],
+            commitHash: null,
+            error:
+              structured ??
+              ({ kind: "unexpected", message: String(error), details: null } satisfies GitError),
+          },
+        }));
+      } finally {
+        setPulling((current) => ({ ...current, [sub.path]: false }));
+        void scan(rootPath);
+      }
+    },
+    [scan]
+  );
+
+  /** « Run All » : enchaîne les sous-projets du dossier qui ont des modifications. */
+  const runAllFor = useCallback(
+    async (rootPath: string) => {
+      const targets = pairs
+        .filter((pair) => pair.rootPath === rootPath)
+        .map((pair) => pair.sub)
+        .filter((sub) => sub.stagedFiles + sub.modifiedFiles + sub.untrackedFiles > 0);
+
+      if (targets.length === 0) return;
+
+      setRunAll({ rootPath, done: 0, total: targets.length, current: targets[0].name });
+      try {
+        for (let index = 0; index < targets.length; index += 1) {
+          const sub = targets[index];
+          setRunAll({ rootPath, done: index, total: targets.length, current: sub.name });
+          await executeWorkflow(rootPath, sub);
+        }
+      } finally {
+        setRunAll(null);
+      }
+    },
+    [pairs, executeWorkflow]
   );
 
   /* ---------------- Données dérivées ---------------- */
-
-  const pairs = useMemo(() => {
-    const list: { rootPath: string; sub: SubProject }[] = [];
-    for (const [rootPath, result] of Object.entries(results)) {
-      if (result.ok) {
-        for (const sub of result.project.subProjects) list.push({ rootPath, sub });
-      }
-    }
-    return list;
-  }, [results]);
 
   const tabs: ProjectTab[] = useMemo(
     () =>
@@ -198,6 +317,19 @@ export default function ProjectsPage() {
   );
 
   const visible = active === GLOBAL_VIEW ? pairs : pairs.filter((pair) => pair.rootPath === active);
+
+  /** Nombre de sous-projets du dossier sélectionné ayant des modifications. */
+  const pendingCount = useMemo(
+    () =>
+      active === GLOBAL_VIEW
+        ? 0
+        : pairs.filter(
+            (pair) =>
+              pair.rootPath === active &&
+              pair.sub.stagedFiles + pair.sub.modifiedFiles + pair.sub.untrackedFiles > 0
+          ).length,
+    [pairs, active]
+  );
 
   /* ---------------- Rendu ---------------- */
 
@@ -219,6 +351,41 @@ export default function ProjectsPage() {
         onAdd={() => void addRoot()}
         onRefresh={() => roots.forEach((path) => void scan(path))}
       />
+
+      {active !== GLOBAL_VIEW && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <ListChecks className="size-4" />
+              Orchestration multi-dépôts
+            </p>
+            <p className="text-muted-foreground text-xs">
+              {pendingCount === 0
+                ? "Aucune modification détectée dans les sous-projets de ce dossier."
+                : `${pendingCount} sous-projet(s) avec des modifications, traités séquentiellement (Add → Commit IA → Push).`}
+            </p>
+          </div>
+
+          {runAll && (
+            <span className="text-muted-foreground text-xs">
+              {runAll.done + 1}/{runAll.total} · {runAll.current}
+            </span>
+          )}
+
+          <Button
+            size="sm"
+            onClick={() => void runAllFor(active)}
+            disabled={pendingCount === 0 || runAll !== null}
+          >
+            {runAll ? (
+              <LoaderCircle data-icon="inline-start" className="animate-spin" />
+            ) : (
+              <ListChecks data-icon="inline-start" />
+            )}
+            Run All Workflows
+          </Button>
+        </div>
+      )}
 
       {roots.length === 0 && (
         <Card className="border-dashed">
@@ -287,8 +454,10 @@ export default function ProjectsPage() {
               onOptionsChange={(options) => updateOptions(sub.path, options)}
               onOpenDiff={() => setDiffTarget(sub)}
               onOpenCommit={() => setCommitTarget(sub)}
-              onRunWorkflow={() => void runWorkflow(rootPath, sub)}
+              onRunWorkflow={() => void executeWorkflow(rootPath, sub)}
+              onPull={() => void pull(rootPath, sub)}
               running={Boolean(busy[sub.path])}
+              pulling={Boolean(pulling[sub.path])}
               result={logs[sub.path] ?? null}
             />
           ))}
