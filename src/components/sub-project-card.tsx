@@ -238,7 +238,7 @@ export function SubProjectCard({
             ) : (
               <Play data-icon="inline-start" />
             )}
-            Run Workflow
+            Valider et pousser
           </Button>
         </div>
 
