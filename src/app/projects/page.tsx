@@ -9,7 +9,8 @@ import { DiffViewer } from "@/components/diff-viewer";
 import { GLOBAL_VIEW, ProjectHeader, type ProjectTab } from "@/components/project-header";
 import { SubProjectCard } from "@/components/sub-project-card";
 import { Card, CardContent } from "@/components/ui/card";
-import { generateLocalCommitMessage, isEmptyDiff } from "@/lib/commit-message";
+import { isEmptyDiff } from "@/lib/commit-message";
+import { DEFAULT_SETTINGS, generateCommitMessage, loadSettings } from "@/lib/generate-commit";
 import { describeError, isTauri, tauri } from "@/lib/tauri-bridge";
 import {
   loadWorkflowPrefs,
@@ -18,7 +19,13 @@ import {
   type WorkflowPrefs,
 } from "@/lib/workflow-prefs";
 import { cn } from "@/lib/utils";
-import type { GitOperationResult, ProjectInfo, SubProject, WorkflowOptions } from "@/types";
+import type {
+  AppSettings,
+  GitOperationResult,
+  ProjectInfo,
+  SubProject,
+  WorkflowOptions,
+} from "@/types";
 
 const ROOTS_KEY = "kitokogit-roots";
 
@@ -35,6 +42,7 @@ export default function ProjectsPage() {
   const [commitTarget, setCommitTarget] = useState<SubProject | null>(null);
   const [logs, setLogs] = useState<Logs>({});
   const [busy, setBusy] = useState<Busy>({});
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
   /* ---------------- Scan ---------------- */
 
@@ -52,6 +60,7 @@ export default function ProjectsPage() {
 
   useEffect(() => {
     setPrefs(loadWorkflowPrefs());
+    void loadSettings().then(setSettings);
     if (!isTauri()) return;
 
     let stored: string[] = [];
@@ -129,8 +138,10 @@ export default function ProjectsPage() {
             }));
             return;
           }
-          // Étape 3 : ce message viendra du provider IA (appelé depuis Rust).
-          message = generateLocalCommitMessage(bundle);
+          // Génération IA côté Rust ; repli automatique sur l'heuristique locale
+          // si le provider est injoignable ou non configuré.
+          const generation = await generateCommitMessage(sub.path, bundle, settings);
+          message = generation.message;
         }
 
         const result = await tauri.runGitWorkflow(
@@ -156,7 +167,7 @@ export default function ProjectsPage() {
         void scan(rootPath);
       }
     },
-    [prefs, scan]
+    [prefs, settings, scan]
   );
 
   /* ---------------- Données dérivées ---------------- */

@@ -23,9 +23,9 @@ fn entry(provider: &str) -> Result<keyring::Entry, String> {
         .map_err(|error| format!("Coffre du système inaccessible : {error}"))
 }
 
-/// Lecture interne, réservée au module IA côté Rust (étape 3 : génération de
-/// message de commit). Volontairement non exposée comme commande Tauri.
-#[allow(dead_code)]
+/// Lecture interne, réservée au module IA côté Rust ([`crate::ai`]).
+/// Volontairement non exposée comme commande Tauri : les clés ne doivent
+/// jamais franchir la frontière IPC.
 pub fn load_api_key(provider: &str) -> Result<Option<String>, String> {
     if !is_supported(provider) {
         return Err(format!("Provider inconnu : {provider}"));

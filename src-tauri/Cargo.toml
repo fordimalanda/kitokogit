@@ -21,6 +21,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Appels HTTP vers les providers IA, en TLS pur Rust (pas d'OpenSSL sous Windows).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Stockage securise des cles API dans le gestionnaire d'identifiants de l'OS.
 # Les secrets ne sont jamais exposes au webview.

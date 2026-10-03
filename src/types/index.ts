@@ -113,3 +113,51 @@ export interface ProviderKeyStatus {
   /** Vrai si une clé est enregistrée côté OS. La clé n'est jamais renvoyée. */
   hasKey: boolean;
 }
+
+/** Catalogue des providers, fourni par le backend Rust (source de vérité). */
+export interface AiProviderInfo {
+  id: ProviderId;
+  label: string;
+  description: string;
+  /** `false` pour Ollama : un modèle local n'a pas besoin de clé API. */
+  requiresKey: boolean;
+  defaultModel: string;
+  models: string[];
+  /** Page où l'utilisateur génère sa clé. */
+  docs: string;
+}
+
+/** Erreur renvoyée par le module IA (`generate_commit_message`, tests…). */
+export interface AiError {
+  kind: string;
+  message: string;
+  details: string | null;
+}
+
+/** Message de commit produit par un provider IA. */
+export interface GeneratedCommit {
+  message: string;
+  provider: string;
+  model: string;
+  diffBytes: number;
+  truncated: boolean;
+}
+
+/** Résultat d'un test de connexion à un provider. */
+export interface ConnectionTest {
+  ok: boolean;
+  provider: string;
+  model: string;
+  latencyMs: number;
+  sample: string;
+}
+
+/** Réglages non secrets, persistés par Rust dans `settings.json`. */
+export interface AppSettings {
+  provider: ProviderId;
+  /** Modèle retenu par provider. Absent ⇒ modèle par défaut du provider. */
+  models: Record<string, string>;
+  customPrompt: string;
+  ollamaBaseUrl: string;
+  fallbackToLocal: boolean;
+}

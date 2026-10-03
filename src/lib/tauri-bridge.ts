@@ -1,8 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AiProviderInfo,
+  AppSettings,
+  ConnectionTest,
   DiffBundle,
-  GitError,
+  GeneratedCommit,
   GitOperationResult,
   GitStatus,
   ProjectInfo,
@@ -21,14 +24,31 @@ export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-/** Transforme une erreur Rust (`GitError`) en message affichable. */
+/** Transforme une erreur Rust (`GitError`/`AiError`) en message affichable. */
 export function describeError(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {
-    const gitError = error as GitError;
-    const details = gitError.details ? `\n${gitError.details}` : "";
-    return `${gitError.message}${details}`;
+    const details = "details" in error && error.details ? `\n${String(error.details)}` : "";
+    return `${String((error as { message: unknown }).message)}${details}`;
   }
   return String(error);
+}
+
+/**
+ * Normalise une erreur structurée venue de Rust
+ * (`{ kind, message, details }`) pour pouvoir raisonner sur le `kind`.
+ */
+export function asStructuredError(
+  error: unknown
+): { kind: string; message: string; details: string | null } | null {
+  if (error && typeof error === "object" && "kind" in error && "message" in error) {
+    const value = error as { kind: unknown; message: unknown; details?: unknown };
+    return {
+      kind: String(value.kind),
+      message: String(value.message),
+      details: value.details ? String(value.details) : null,
+    };
+  }
+  return null;
 }
 
 export const tauri = {
@@ -60,4 +80,29 @@ export const tauri = {
   setApiKey: (provider: string, apiKey: string) =>
     invoke<void>("set_api_key", { provider, apiKey }),
   deleteApiKey: (provider: string) => invoke<void>("delete_api_key", { provider }),
+
+  /* ---- Réglages non secrets ---- */
+  getSettings: () => invoke<AppSettings>("get_settings"),
+  saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),
+
+  /* ---- Intelligence artificielle (appels HTTP côté Rust) ---- */
+  aiProviders: () => invoke<AiProviderInfo[]>("ai_providers"),
+  generateCommitMessage: (
+    path: string,
+    provider: string,
+    model: string | null,
+    customPrompt: string | null,
+    ollamaBaseUrl: string | null
+  ) =>
+    invoke<GeneratedCommit>("generate_commit_message", {
+      path,
+      provider,
+      model,
+      customPrompt,
+      ollamaBaseUrl,
+    }),
+  testProviderConnection: (provider: string, model: string | null, ollamaBaseUrl: string | null) =>
+    invoke<ConnectionTest>("test_provider_connection", { provider, model, ollamaBaseUrl }),
+  listOllamaModels: (baseUrl: string | null) =>
+    invoke<string[]>("list_ollama_models", { baseUrl }),
 };

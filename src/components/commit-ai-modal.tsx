@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CircleAlert,
+  CloudOff,
   LoaderCircle,
   Send,
   Sparkles,
@@ -21,14 +22,21 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { isEmptyDiff } from "@/lib/commit-message";
 import {
-  buildDiffForPrompt,
-  generateLocalCommitMessage,
-  isEmptyDiff,
-} from "@/lib/commit-message";
+  generateCommitMessage,
+  loadSettings,
+  type CommitGeneration,
+} from "@/lib/generate-commit";
 import { describeError, isTauri, tauri } from "@/lib/tauri-bridge";
 import { cn } from "@/lib/utils";
-import type { DiffBundle, GitOperationResult, SubProject, WorkflowOptions } from "@/types";
+import type {
+  AppSettings,
+  DiffBundle,
+  GitOperationResult,
+  SubProject,
+  WorkflowOptions,
+} from "@/types";
 
 /** Vrai si la première ligne respecte `type(scope): description`. */
 const CONVENTIONAL = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: .+/;
@@ -48,57 +56,81 @@ export function CommitAiModal({
   options,
   onFinished,
 }: CommitAiModalProps) {
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [bundle, setBundle] = useState<DiffBundle | null>(null);
+  const [generation, setGeneration] = useState<CommitGeneration | null>(null);
   const [message, setMessage] = useState("");
+  const [edited, setEdited] = useState(false);
+  const [empty, setEmpty] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [diffInfo, setDiffInfo] = useState({ bytes: 0, truncated: false });
-  const [origin, setOrigin] = useState<"local" | "manual">("local");
 
-  const regenerate = useCallback((source: DiffBundle) => {
-    setMessage(generateLocalCommitMessage(source));
-    setOrigin("local");
+  // Les réglages (provider, modèle, consignes) ne changent pas pendant la session.
+  useEffect(() => {
+    void loadSettings().then(setSettings);
   }, []);
 
-  const load = useCallback(
-    async (target: SubProject, withMessage: boolean) => {
-      if (!isTauri()) {
-        setError("Webview Tauri non détectée.");
-        return;
-      }
-      setLoading(true);
-      setError(null);
-      try {
-        const result = await tauri.getDiffBundle(target.path);
-        setBundle(result);
-        const prepared = buildDiffForPrompt(result);
-        setDiffInfo({ bytes: prepared.bytes, truncated: prepared.truncated });
-        if (withMessage) regenerate(result);
-      } catch (cause) {
-        setError(describeError(cause));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [regenerate]
-  );
-
+  // Lecture du diff puis génération, à chaque ouverture.
   useEffect(() => {
-    if (!open || !sub) return;
-    setMessage("");
-    setBundle(null);
-    setError(null);
-    void load(sub, true);
-  }, [open, sub, load]);
+    if (!open || !sub || !settings || !isTauri()) return;
 
-  const empty = bundle ? isEmptyDiff(bundle) : false;
-  const firstLine = message.split("\n")[0] ?? "";
-  const looksConventional = CONVENTIONAL.test(firstLine);
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setGeneration(null);
+    setMessage("");
+    setEdited(false);
+    setBundle(null);
+
+    tauri
+      .getDiffBundle(sub.path)
+      .then(async (loaded) => {
+        if (cancelled) return;
+        setBundle(loaded);
+
+        const isEmpty = isEmptyDiff(loaded);
+        setEmpty(isEmpty);
+        if (isEmpty) return;
+
+        const generated = await generateCommitMessage(sub.path, loaded, settings);
+        if (cancelled) return;
+        setGeneration(generated);
+        setMessage(generated.message);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setError(describeError(cause));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, sub, settings]);
+
+  const regenerate = useCallback(async () => {
+    if (!sub || !settings) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      const generated = await generateCommitMessage(sub.path, bundle, settings);
+      setGeneration(generated);
+      setMessage(generated.message);
+      setEdited(false);
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setGenerating(false);
+    }
+  }, [sub, settings, bundle]);
 
   async function handleCommit() {
     if (!sub) return;
     const trimmed = message.trim();
+
     if (!trimmed) {
       setError("Le message de commit est vide.");
       return;
@@ -121,11 +153,7 @@ export function CommitAiModal({
       if (result.success) {
         onOpenChange(false);
       } else if (result.error) {
-        setError(
-          result.error.details
-            ? `${result.error.message}\n${result.error.details}`
-            : result.error.message
-        );
+        setError(describeError(result.error));
       }
     } catch (cause) {
       setError(describeError(cause));
@@ -133,6 +161,10 @@ export function CommitAiModal({
       setSubmitting(false);
     }
   }
+
+  const firstLine = message.split("\n")[0] ?? "";
+  const looksConventional = CONVENTIONAL.test(firstLine);
+  const busy = loading || generating;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -142,28 +174,49 @@ export function CommitAiModal({
             <Sparkles className="size-4" />
             Message de commit
           </DialogTitle>
-          <DialogDescription className="font-mono text-xs break-all">
-            {sub?.path}
-          </DialogDescription>
+          <DialogDescription className="font-mono text-xs break-all">{sub?.path}</DialogDescription>
         </DialogHeader>
 
+        {/* Origine du message */}
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={origin === "local" ? "secondary" : "outline"}>
-            {origin === "local" ? "Heuristique locale" : "Édité manuellement"}
-          </Badge>
-          {diffInfo.truncated && (
-            <Badge variant="warning">
-              diff tronqué · {Math.round(diffInfo.bytes / 1024)} Ko
+          {generation?.origin === "ai" && (
+            <Badge variant="info">
+              {generation.provider} · {generation.model}
             </Badge>
           )}
-          {options.autoAdd && <Badge variant="info">Auto-Add</Badge>}
-          {options.autoPush && <Badge variant="info">Auto-Push</Badge>}
+          {generation?.origin === "local" && (
+            <Badge variant="warning">
+              <CloudOff className="size-3" />
+              Repli local
+            </Badge>
+          )}
+          {edited && <Badge variant="secondary">Édité</Badge>}
+          {generation?.truncated && (
+            <Badge variant="warning">
+              diff tronqué · {Math.round(generation.diffBytes / 1024)} Ko
+            </Badge>
+          )}
+          {options.autoAdd && <Badge variant="outline">Auto-Add</Badge>}
+          {options.autoPush && <Badge variant="outline">Auto-Push</Badge>}
         </div>
 
-        {loading ? (
+        {/* Raison du repli local */}
+        {generation?.warning && (
+          <div className="border-amber-500/30 bg-amber-500/5 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <TriangleAlert className="mt-px size-3.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-medium">
+                IA indisponible ({generation.warning.kind}) — message généré localement.
+              </p>
+              <p className="mt-0.5">{generation.warning.message}</p>
+            </div>
+          </div>
+        )}
+
+        {busy ? (
           <p className="text-muted-foreground flex items-center gap-2 py-8 text-sm">
             <LoaderCircle className="size-4 animate-spin" />
-            Analyse des modifications…
+            {generating ? "Génération du message par l'IA…" : "Analyse des modifications…"}
           </p>
         ) : (
           <ScrollArea className="max-h-[46vh]">
@@ -179,7 +232,7 @@ export function CommitAiModal({
                 value={message}
                 onChange={(event) => {
                   setMessage(event.currentTarget.value);
-                  setOrigin("manual");
+                  setEdited(true);
                 }}
                 spellCheck={false}
                 rows={7}
@@ -194,7 +247,9 @@ export function CommitAiModal({
                 <span
                   className={cn(
                     "flex items-center gap-1",
-                    !looksConventional && firstLine.length > 0 && "text-amber-600 dark:text-amber-400"
+                    !looksConventional &&
+                      firstLine.length > 0 &&
+                      "text-amber-600 dark:text-amber-400"
                   )}
                 >
                   {looksConventional ? (
@@ -222,15 +277,11 @@ export function CommitAiModal({
         )}
 
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => bundle && regenerate(bundle)}
-            disabled={loading || !bundle}
-          >
+          <Button variant="outline" onClick={() => void regenerate()} disabled={busy || empty}>
             <WandSparkles data-icon="inline-start" />
-            Régénérer
+            {generation?.origin === "local" ? "Réessayer l'IA" : "Régénérer"}
           </Button>
-          <Button onClick={() => void handleCommit()} disabled={submitting || loading || empty}>
+          <Button onClick={() => void handleCommit()} disabled={submitting || busy || empty}>
             {submitting ? (
               <LoaderCircle data-icon="inline-start" className="animate-spin" />
             ) : (

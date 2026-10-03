@@ -4,13 +4,17 @@
 //! ici : la webview Next.js n'est qu'une couche de présentation.
 //!
 //! Modules :
+//! - [`ai`] : connecteurs HTTP vers les providers IA (clés jamais exposées) ;
 //! - [`git_manager`] : exécution des commandes Git natives et gestion d'erreurs ;
 //! - [`scanner`] : détection des dépôts, monorepos et sous-projets ;
-//! - [`secrets`] : clés API des providers IA, stockées par l'OS.
+//! - [`secrets`] : clés API des providers, stockées par l'OS ;
+//! - [`settings`] : réglages non secrets (provider et modèle par défaut).
 
+mod ai;
 mod git_manager;
 mod scanner;
 mod secrets;
+mod settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -37,6 +41,14 @@ pub fn run() {
             secrets::set_api_key,
             secrets::delete_api_key,
             secrets::list_api_key_status,
+            // Réglages non secrets
+            settings::get_settings,
+            settings::save_settings,
+            // Intelligence artificielle
+            ai::ai_providers,
+            ai::generate_commit_message,
+            ai::test_provider_connection,
+            ai::list_ollama_models,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de KitokoGit");
