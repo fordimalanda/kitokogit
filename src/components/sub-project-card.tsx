@@ -111,6 +111,15 @@ export function SubProjectCard({
   const status = statusOf(sub);
   const changed = sub.stagedFiles + sub.modifiedFiles + sub.untrackedFiles;
 
+  // Liseré de couleur sur le bord gauche de la carte : le dossier « saute aux
+  // yeux » dans la liste dès qu'il contient des modifications à pousser.
+  const accent =
+    status.variant === "destructive"
+      ? "border-l-destructive"
+      : changed > 0
+        ? "border-l-amber-500"
+        : "border-l-emerald-500";
+
   // Un push refusé ou des commits distants en avance ⇒ la synchronisation est
   // l'action la plus utile : on met le bouton en avant.
   const syncSuggested =
@@ -119,9 +128,19 @@ export function SubProjectCard({
     result?.error?.kind === "merge_conflict";
 
   return (
-    <Card className="gap-4">
+    <Card className={cn("gap-4 border-l-4", accent)}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
+          <span
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              status.variant === "destructive"
+                ? "bg-destructive"
+                : changed > 0
+                  ? "bg-amber-500"
+                  : "bg-emerald-500"
+            )}
+          />
           {sub.name}
           {sub.branch && (
             <span className="text-muted-foreground flex items-center gap-1 font-mono text-xs font-normal">

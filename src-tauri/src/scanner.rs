@@ -260,3 +260,54 @@ fn walk(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<PathBuf>) {
         walk(&path, depth + 1, max_depth, out);
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Rafraîchissement groupé                                             */
+/* ------------------------------------------------------------------ */
+
+/// Résultat du scan d'un dossier racine, tolérant à l'échec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshResult {
+    pub root: String,
+    pub project: Option<ProjectInfo>,
+    pub error: Option<String>,
+}
+
+/// Rescanne plusieurs dossiers racine en **parallèle**.
+///
+/// Point d'entrée du suivi automatique côté interface : un seul appel IPC pour
+/// tous les projets au lieu d'un par dossier, et les `git status` partent dans
+/// des threads séparés pour que les temps d'attente ne s'additionnent pas.
+///
+/// Un dossier illisible ne fait jamais échouer l'ensemble : l'erreur est
+/// renvoyée dans le champ `error` de sa propre entrée.
+#[tauri::command]
+pub async fn refresh_projects(roots: Vec<String>) -> Vec<RefreshResult> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let handles: Vec<std::thread::JoinHandle<RefreshResult>> = roots
+            .into_iter()
+            .map(|root| {
+                std::thread::spawn(move || match scan_project(root.clone()) {
+                    Ok(project) => RefreshResult {
+                        root,
+                        project: Some(project),
+                        error: None,
+                    },
+                    Err(error) => RefreshResult {
+                        root,
+                        project: None,
+                        error: Some(error.message),
+                    },
+                })
+            })
+            .collect();
+
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}

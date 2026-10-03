@@ -48,6 +48,13 @@ export interface ProjectInfo {
   error: string | null;
 }
 
+/** Résultat du scan d'un dossier racine, tolérant à l'échec. */
+export interface RefreshResult {
+  root: string;
+  project: ProjectInfo | null;
+  error: string | null;
+}
+
 export interface FileChange {
   path: string;
   /** Statut sur 2 caractères tel que renvoyé par `git status --porcelain=v2`. */

@@ -36,6 +36,16 @@ import type {
 } from "@/types";
 
 const ROOTS_KEY = "kitokogit-roots";
+const AUTO_REFRESH_KEY = "kitokogit-auto-refresh";
+
+/** Intervalle du suivi automatique (ms). Suffisamment court pour paraître
+ *  instantané, assez long pour rester invisible en consommation. */
+const AUTO_REFRESH_MS = 2500;
+
+/** Nombre de fichiers en attente de traitement pour un sous-projet. */
+function pendingChanges(sub: SubProject): number {
+  return sub.stagedFiles + sub.modifiedFiles + sub.untrackedFiles;
+}
 
 type ScanResult = { ok: true; project: ProjectInfo } | { ok: false; error: string };
 type Logs = Record<string, GitOperationResult | null>;
@@ -61,6 +71,7 @@ export default function ProjectsPage() {
   const [pulling, setPulling] = useState<Busy>({});
   const [runAll, setRunAll] = useState<RunAllState | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   /* ---------------- Scan ---------------- */
 
@@ -79,6 +90,7 @@ export default function ProjectsPage() {
   useEffect(() => {
     setPrefs(loadWorkflowPrefs());
     void loadSettings().then(setSettings);
+    if (window.localStorage.getItem(AUTO_REFRESH_KEY) === "false") setAutoRefresh(false);
     if (!isTauri()) return;
 
     let stored: string[] = [];
@@ -97,6 +109,55 @@ export default function ProjectsPage() {
     setRoots(next);
     window.localStorage.setItem(ROOTS_KEY, JSON.stringify(next));
   }
+
+  function toggleAutoRefresh(value: boolean) {
+    setAutoRefresh(value);
+    window.localStorage.setItem(AUTO_REFRESH_KEY, String(value));
+  }
+
+  /**
+   * Suivi automatique : rescanne régulièrement les dossiers racine pour que
+   * l'état Git affiché reste vrai sans aucune action de l'utilisateur.
+   *
+   * Le rafraîchissement est suspendu quand la fenêtre est masquée et déclenché
+   * immédiatement au retour au premier plan.
+   */
+  useEffect(() => {
+    if (!autoRefresh || !isTauri() || roots.length === 0) return;
+
+    let cancelled = false;
+
+    const tick = async () => {
+      if (document.hidden) return;
+      try {
+        const refreshed = await tauri.refreshProjects(roots);
+        if (cancelled) return;
+
+        setResults((current) => {
+          const next = { ...current };
+          for (const item of refreshed) {
+            next[item.root] = item.project
+              ? { ok: true, project: item.project }
+              : { ok: false, error: item.error ?? "Dossier illisible" };
+          }
+          return next;
+        });
+      } catch {
+        // Un échec de rafraîchissement ne doit jamais interrompre l'utilisateur.
+      }
+    };
+
+    const timer = window.setInterval(() => void tick(), AUTO_REFRESH_MS);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", tick);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [autoRefresh, roots]);
 
   async function addRoot() {
     const selected = await open({
@@ -311,6 +372,7 @@ export default function ProjectsPage() {
           label: project?.name ?? basename(path),
           kind: project?.kind ?? "repository",
           subCount: project?.subProjects.length ?? 0,
+          changedCount: project?.subProjects.filter((sub) => pendingChanges(sub) > 0).length ?? 0,
         };
       }),
     [roots, results]
@@ -350,6 +412,8 @@ export default function ProjectsPage() {
         onSelect={setActive}
         onAdd={() => void addRoot()}
         onRefresh={() => roots.forEach((path) => void scan(path))}
+        autoRefresh={autoRefresh}
+        onAutoRefreshChange={toggleAutoRefresh}
       />
 
       {active !== GLOBAL_VIEW && (
@@ -382,7 +446,9 @@ export default function ProjectsPage() {
             ) : (
               <ListChecks data-icon="inline-start" />
             )}
-            Run All Workflows
+            {pendingCount > 0
+              ? `Valider et pousser (${pendingCount})`
+              : "Valider et pousser"}
           </Button>
         </div>
       )}

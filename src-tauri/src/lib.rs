@@ -40,6 +40,7 @@ pub fn run() {
             // Scan de projets
             scanner::scan_project,
             scanner::discover_repositories,
+            scanner::refresh_projects,
             // Clés API
             secrets::set_api_key,
             secrets::delete_api_key,

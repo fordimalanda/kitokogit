@@ -11,6 +11,7 @@ import type {
   HistoryEntry,
   ProjectInfo,
   ProviderKeyStatus,
+  RefreshResult,
 } from "@/types";
 
 /**
@@ -60,6 +61,8 @@ export const tauri = {
   scanProject: (path: string) => invoke<ProjectInfo>("scan_project", { path }),
   discoverRepositories: (root: string, maxDepth = 3) =>
     invoke<string[]>("discover_repositories", { root, maxDepth }),
+  /** Rescanne plusieurs dossiers racine en un seul appel (suivi automatique). */
+  refreshProjects: (roots: string[]) => invoke<RefreshResult[]>("refresh_projects", { roots }),
 
   /* ---- Lecture Git ---- */
   gitStatus: (path: string) => invoke<GitStatus>("git_status", { path }),
