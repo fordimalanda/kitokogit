@@ -236,33 +236,26 @@ export default function SettingsPage() {
               {provider.requiresKey && (
                 <div className="flex flex-wrap gap-2">
                   <div className="relative min-w-64 flex-1">
-                    {/*
-                      On utilise volontairement `type="text"` (défaut) et non
-                      `type="password"` : sous WebView2, la saisie dans un champ
-                      mot de passe déclenche le gestionnaire d'identifiants
-                      d'Edge, qui tente une navigation interne et casse la page
-                      dès le premier caractère. Le masquage est fait en CSS via
-                      la classe `secret-field`.
-                    */}
                     <Input
+                      type={revealed[provider.id] ? "text" : "password"}
                       autoComplete="off"
-                      autoCorrect="off"
-                      autoCapitalize="off"
                       spellCheck={false}
                       value={drafts[provider.id] ?? ""}
-                      onChange={(event) =>
-                        setDrafts((current) => ({
-                          ...current,
-                          [provider.id]: event.currentTarget.value,
-                        }))
-                      }
+                      onChange={(event) => {
+                        // La valeur est lue AVANT d'entrer dans l'updater : React
+                        // remet `currentTarget` à null dès la fin du handler, donc
+                        // y accéder depuis l'updater (exécuté plus tard) lève
+                        // « Cannot read properties of null (reading 'value') ».
+                        const value = event.currentTarget.value;
+                        setDrafts((current) => ({ ...current, [provider.id]: value }));
+                      }}
                       placeholder={
                         hasKey[provider.id]
                           ? "•••••••••• (clé enregistrée — collez pour remplacer)"
                           : "Collez votre clé API"
                       }
                       aria-label={`Clé API ${provider.label}`}
-                      className={cn("pr-10", !revealed[provider.id] && "secret-field")}
+                      className="pr-10"
                     />
                     <button
                       type="button"
