@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "next dev -p 1420",
-    "build": "next build",
+    "build": "next build && node scripts/fix-next-export.mjs",
+    "preview": "node scripts/preview-static.mjs out 4321",
     "tauri": "tauri"
   },
   "dependencies": {

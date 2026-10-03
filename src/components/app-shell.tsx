@@ -53,7 +53,13 @@ export function AppShell({ children }: { children: ReactNode }) {
     setTheme(next);
   }
 
-  const meta = PAGE_META[pathname] ?? { title: "KitokoGit", subtitle: "" };
+  // `trailingSlash: true` fait renvoyer « /settings/ » par usePathname : on
+  // normalise, sinon le titre et l'élément actif de la navigation ne matchent pas
+  // les clés de PAGE_META / NAV_ITEMS (écrites sans slash final).
+  const current =
+    pathname !== "/" && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+
+  const meta = PAGE_META[current] ?? { title: "KitokoGit", subtitle: "" };
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -75,7 +81,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </p>
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const active = pathname === item.href;
+            const active = current === item.href;
             return (
               <Link
                 key={item.href}
