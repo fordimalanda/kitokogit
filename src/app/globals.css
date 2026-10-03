@@ -190,3 +190,15 @@ body {
     animation: none;
   }
 }
+
+/*
+ * Masquage d'une valeur saisie SANS utiliser `type="password"`.
+ *
+ * Sous WebView2, la saisie dans un champ mot de passe active le gestionnaire
+ * d'identifiants d'Edge, qui tente une navigation interne : la webview affiche
+ * alors « This page couldn't load » dès le premier caractère tapé.
+ * `-webkit-text-security` masque visuellement sans déclencher ce mécanisme.
+ */
+.secret-field {
+  -webkit-text-security: disc;
+}

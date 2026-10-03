@@ -236,8 +236,19 @@ export default function SettingsPage() {
               {provider.requiresKey && (
                 <div className="flex flex-wrap gap-2">
                   <div className="relative min-w-64 flex-1">
+                    {/*
+                      On utilise volontairement `type="text"` (défaut) et non
+                      `type="password"` : sous WebView2, la saisie dans un champ
+                      mot de passe déclenche le gestionnaire d'identifiants
+                      d'Edge, qui tente une navigation interne et casse la page
+                      dès le premier caractère. Le masquage est fait en CSS via
+                      la classe `secret-field`.
+                    */}
                     <Input
-                      type={revealed[provider.id] ? "text" : "password"}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
                       value={drafts[provider.id] ?? ""}
                       onChange={(event) =>
                         setDrafts((current) => ({
@@ -251,7 +262,7 @@ export default function SettingsPage() {
                           : "Collez votre clé API"
                       }
                       aria-label={`Clé API ${provider.label}`}
-                      className="pr-10"
+                      className={cn("pr-10", !revealed[provider.id] && "secret-field")}
                     />
                     <button
                       type="button"
