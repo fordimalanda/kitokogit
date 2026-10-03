@@ -76,6 +76,23 @@ export interface GitOperationResult {
   error: GitError | null;
 }
 
+/** Tout ce qui peut partir dans un commit, en un seul aller-retour. */
+export interface DiffBundle {
+  /** Modifications déjà indexées (`git diff --cached`). */
+  staged: string;
+  /** Modifications non indexées, résumé des fichiers non suivis inclus. */
+  unstaged: string;
+  /** Fichiers non suivis (contenu non inclus). */
+  untracked: string[];
+}
+
+/** Options de la chaîne automatique, globales ou par projet. */
+export interface WorkflowOptions {
+  autoAdd: boolean;
+  autoCommit: boolean;
+  autoPush: boolean;
+}
+
 /** Erreur Git structurée : ne fait jamais planter l'application. */
 export interface GitError {
   /** `not_a_repository`, `push_rejected`, `network`, `remote_not_found`, … */

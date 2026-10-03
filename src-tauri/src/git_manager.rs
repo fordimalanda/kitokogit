@@ -529,6 +529,199 @@ pub fn git_push(path: String) -> GitResult<Vec<String>> {
     Ok(steps)
 }
 
+/* ------------------------------------------------------------------ */
+/* Diff complet du répertoire de travail                               */
+/* ------------------------------------------------------------------ */
+
+/// Tout ce qui peut partir dans un commit, en un seul aller-retour.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffBundle {
+    /// Modifications déjà indexées (`git diff --cached`).
+    pub staged: String,
+    /// Modifications non indexées (`git diff`), résumé des non-suivis inclus.
+    pub unstaged: String,
+    /// Fichiers non suivis (leur contenu n'est pas inclus).
+    pub untracked: Vec<String>,
+}
+
+pub fn read_diff_bundle(path: &Path) -> GitResult<DiffBundle> {
+    ensure_dir(path)?;
+    let status = read_status(path)?;
+
+    Ok(DiffBundle {
+        staged: read_diff(path, true)?,
+        unstaged: read_diff(path, false)?,
+        untracked: status.untracked,
+    })
+}
+
+#[tauri::command]
+pub fn get_diff_bundle(path: String) -> GitResult<DiffBundle> {
+    read_diff_bundle(Path::new(&path))
+}
+
+/* ------------------------------------------------------------------ */
+/* Workflow paramétrable : add → commit → push                         */
+/* ------------------------------------------------------------------ */
+
+/// Résultat d'une chaîne d'opérations, avec le journal des étapes exécutées.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitOperationResult {
+    pub success: bool,
+    pub steps: Vec<String>,
+    pub commit_hash: Option<String>,
+    pub error: Option<GitError>,
+}
+
+impl GitOperationResult {
+    fn failure(steps: Vec<String>, error: GitError) -> Self {
+        Self {
+            success: false,
+            steps,
+            commit_hash: None,
+            error: Some(error),
+        }
+    }
+}
+
+/// Exécute `git add` → `git commit` → `git push` selon les options reçues.
+///
+/// Un échec d'étape **ne remonte pas en `Err`** : il est décrit dans
+/// `result.error` et la chaîne s'arrête, ce qui permet à l'interface
+/// d'afficher le journal des étapes déjà réussies.
+#[tauri::command]
+pub fn run_git_workflow(
+    path: String,
+    do_add: bool,
+    message: Option<String>,
+    do_push: bool,
+) -> GitResult<GitOperationResult> {
+    let dir = Path::new(&path);
+    ensure_dir(dir)?;
+
+    let mut steps: Vec<String> = Vec::new();
+
+    // --- 1. git add -A ---
+    if do_add {
+        steps.push("git add -A".to_string());
+        match run_git(dir, &["add", "-A"]) {
+            Ok(output) if output.success => {}
+            Ok(output) => {
+                return Ok(GitOperationResult::failure(
+                    steps,
+                    classify(&output.stderr, &output.stdout),
+                ))
+            }
+            Err(error) => return Ok(GitOperationResult::failure(steps, error)),
+        }
+    }
+
+    // --- 2. git commit -m <message> ---
+    if let Some(raw_message) = message.as_deref() {
+        let commit_message = raw_message.trim();
+        if !commit_message.is_empty() {
+            let status = read_status(dir)?;
+            if status.staged.is_empty() {
+                return Ok(GitOperationResult::failure(
+                    steps,
+                    GitError::new(
+                        "nothing_to_commit",
+                        "Rien n'est indexé : activez « Auto-Add » ou indexez des fichiers avant de committer.",
+                        None,
+                    ),
+                ));
+            }
+
+            steps.push(format!("git commit -m \"{}\"", first_line(commit_message)));
+            match run_git(dir, &["commit", "-m", commit_message]) {
+                Ok(output) if output.success => {}
+                Ok(output) => {
+                    return Ok(GitOperationResult::failure(
+                        steps,
+                        classify(&output.stderr, &output.stdout),
+                    ))
+                }
+                Err(error) => return Ok(GitOperationResult::failure(steps, error)),
+            }
+        }
+    }
+
+    let mut commit_hash = None;
+    if let Ok(head) = run_git(dir, &["rev-parse", "--short", "HEAD"]) {
+        if head.success {
+            let value = head.stdout.trim().to_string();
+            if !value.is_empty() {
+                commit_hash = Some(value);
+            }
+        }
+    }
+
+    // --- 3. git push ---
+    if do_push {
+        let status = read_status(dir)?;
+
+        let Some(branch) = status.branch.clone() else {
+            return Ok(GitOperationResult::failure(
+                steps,
+                GitError::plain(
+                    "detached_head",
+                    "Vous êtes en HEAD détachée : aucun push possible.",
+                ),
+            ));
+        };
+
+        if status.remote.is_none() {
+            return Ok(GitOperationResult::failure(
+                steps,
+                GitError::new(
+                    "remote_missing",
+                    "Aucun dépôt distant n'est configuré : impossible de pousser.",
+                    status.remote_error,
+                ),
+            ));
+        }
+
+        let has_upstream = status.upstream.is_some();
+        let args: Vec<&str> = if has_upstream {
+            vec!["push"]
+        } else {
+            vec!["push", "-u", "origin", branch.as_str()]
+        };
+        steps.push(if has_upstream {
+            "git push".to_string()
+        } else {
+            format!("git push -u origin {branch}")
+        });
+
+        match run_git(dir, &args) {
+            Ok(output) if output.success => {
+                for line in format!("{}\n{}", output.stderr, output.stdout).lines() {
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        steps.push(line.to_string());
+                    }
+                }
+            }
+            Ok(output) => {
+                return Ok(GitOperationResult::failure(
+                    steps,
+                    classify(&output.stderr, &output.stdout),
+                ))
+            }
+            Err(error) => return Ok(GitOperationResult::failure(steps, error)),
+        }
+    }
+
+    Ok(GitOperationResult {
+        success: true,
+        steps,
+        commit_hash,
+        error: None,
+    })
+}
+
 fn first_line(value: &str) -> String {
     value.lines().next().unwrap_or_default().to_string()
 }

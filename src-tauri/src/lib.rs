@@ -23,11 +23,13 @@ pub fn run() {
             // Lecture Git
             git_manager::git_status,
             git_manager::get_git_diff,
+            git_manager::get_diff_bundle,
             // Écriture Git
             git_manager::git_init,
             git_manager::git_add_all,
             git_manager::git_commit,
             git_manager::git_push,
+            git_manager::run_git_workflow,
             // Scan de projets
             scanner::scan_project,
             scanner::discover_repositories,

@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { GitError, GitStatus, ProjectInfo, ProviderKeyStatus } from "@/types";
+import type {
+  DiffBundle,
+  GitError,
+  GitOperationResult,
+  GitStatus,
+  ProjectInfo,
+  ProviderKeyStatus,
+} from "@/types";
 
 /**
  * Couche unique d'accès au backend Rust.
@@ -37,6 +44,7 @@ export const tauri = {
   gitStatus: (path: string) => invoke<GitStatus>("git_status", { path }),
   getGitDiff: (path: string, staged = false) =>
     invoke<string>("get_git_diff", { path, staged }),
+  getDiffBundle: (path: string) => invoke<DiffBundle>("get_diff_bundle", { path }),
 
   /* ---- Écriture Git ---- */
   gitInit: (path: string) => invoke<string[]>("git_init", { path }),
@@ -44,6 +52,8 @@ export const tauri = {
   gitCommit: (path: string, message: string) =>
     invoke<string[]>("git_commit", { path, message }),
   gitPush: (path: string) => invoke<string[]>("git_push", { path }),
+  runGitWorkflow: (path: string, doAdd: boolean, message: string | null, doPush: boolean) =>
+    invoke<GitOperationResult>("run_git_workflow", { path, doAdd, message, doPush }),
 
   /* ---- Clés API (stockées côté OS, jamais renvoyées au webview) ---- */
   listApiKeyStatus: () => invoke<ProviderKeyStatus[]>("list_api_key_status"),
